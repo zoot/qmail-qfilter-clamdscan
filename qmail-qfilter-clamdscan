@@ -1,7 +1,7 @@
 #!/usr/bin/perperl
 
-# File        : qfilter-clamdscan.pl
-# Version     : 0.1, 2008-06-26
+# File        : qmail-qfilter-clamdscan
+# Version     : 0.2, 2008-06-26
 # Description : Filter for clamdscan, to be invoked by qmail-qfilter
 # Author      : Dale Gallagher <dale(dot)gallagher(at)gmail.com>
 # Licence     : GNU GPL, Version 3, 29 June 2007
@@ -32,7 +32,7 @@ use File::Temp qw(tempfile);
 # Create qmail-qfilter.sh wrapper 
 #
 #    #!/bin/sh
-#    exec /path/to/qmail-qfilter /path/to/qfilter-clamdscan.pl
+#    exec /path/to/qmail-qfilter /path/to/qmail-qfilter-clamdscan
 #
 # Example of modified /etc/tcprules/smtp
 #
