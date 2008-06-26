@@ -1,0 +1,167 @@
+#!/usr/bin/perperl
+
+# File        : qfilter-clamdscan.pl
+# Version     : 0.1, 2008-06-26
+# Description : Filter for clamdscan, to be invoked by qmail-qfilter
+# Author      : Dale Gallagher <dale(dot)gallagher(at)gmail.com>
+# Licence     : GNU GPL, Version 3, 29 June 2007
+#               http://www.gnu.org/licenses/gpl.html
+
+use strict;
+use File::Temp qw(tempfile);
+
+# Installation =======================================================
+
+# This assumes qmail has had the QMAILQUEUE patch applied
+#
+# Create qmail-qfilter working directory hierarchy as follows
+#
+#    mkdir -p /var/qmail/qfilter/{temp,scan,hold,log}
+#    chown qmaild:clamav /var/qmail/qfilter
+#    (assuming clamd runs as user clamav)
+#    chown qmaild:nofiles /var/qmail/qfilter/{temp,hold,log}
+#    chown qmaild:clamav /var/qmail/qfilter/scan
+#    chmod -R 750 /var/qmail/qfilter
+#    chmod +t /var/qmail/qfilter/scan
+#
+# Before compiling qmail-qfilter
+#
+#    Change TMPDIR in qmail-qfilter.c to:
+#    #define TMPDIR "/var/qmail/qfilter/temp"
+#
+# Create qmail-qfilter.sh wrapper 
+#
+#    #!/bin/sh
+#    exec /path/to/qmail-qfilter /path/to/qfilter-clamdscan.pl
+#
+# Example of modified /etc/tcprules/smtp
+#
+#    127.:allow,RELAYCLIENT=""
+#    :allow,QMAILQUEUE="/path/to/qfilter-wrapper.sh",DEBUG=""
+#
+# Don't forget to edit /etc/ld.so.conf and run ldconfig
+#
+#    /usr/local/bglibs/lib
+
+# Configuration ======================================================
+
+# Set to 1 if running under persistent perl in order to
+# explicitly remove the temp file, given that tempfile() will
+# not auto-delete, since the script never exits
+# see: http://search.cpan.org/~jhi/perl-5.8.0/lib/File/Temp.pm
+# NOTE: don't forget to use #!/path/to/perperl
+my $persistent_perl = 1; # set to 0 (zero) if not using perperl
+
+my $clamdscan = '/usr/bin/clamdscan';
+my $base_dir   = '/var/qmail/qfilter';
+my $scan_dir   = "$base_dir/scan";
+my $hold_dir   = "$base_dir/hold";
+my $log_file   = "$base_dir/log/clamdscan.log";
+
+# Don't change anything after this ===================================
+
+my $next_filter = 0;
+  # Continue with next filter
+my $abort_reject = 31;
+  # Abort filter chain, SMTP reject
+my $abort_retry = 71;
+  # Abort filter chain, SMTP retry
+my $abort_quarantine = 31;
+  # Abort filter chain, SMTP accept
+  # Quarantine message if successfully written to $scan_dir,
+  # but subsequent error occurs.
+  # Cronjob to alert admin to investigate.
+
+# Functions ==========================================================
+
+sub quarantine_file {
+  my $file = shift;
+  my $dir1 = shift;
+  my $dir2 = shift;
+  unless(link("$dir1/$file", "$dir2/$file")) {
+    &log_error("error $!: failed to link $dir1/$file $dir2/$file");
+    exit($abort_retry);
+  }
+  my $files_deleted = unlink("$dir1/$file");
+  if ($files_deleted != 1) {
+    &log_error("error $!: failed to unlink $dir1/$file");
+    exit($abort_retry);
+  }
+}
+
+sub remove_file {
+  my $file = shift;
+  my $dir = shift;
+  my $files_deleted = unlink("$dir/$file");
+  if ($files_deleted != 1) {
+    &log_error("error $!: failed to unlink $dir/$file");
+    exit($abort_retry);
+  }
+}
+
+sub log_error {
+  my $message = shift;
+  unless(open (LOG, ">>$log_file")) {
+    &log_error("error $!: failed to open $log_file");
+    exit($abort_retry);
+  }
+  my $stamp = scalar localtime(time);
+  print LOG "$stamp\t$message\n";
+  close LOG;
+}
+
+# Main ===============================================================
+
+# change to $scan_dir
+unless(chdir($scan_dir)) {
+  &log_error("error $!: failed to chdir $scan_dir");
+  exit($abort_retry);
+}
+
+# create temp file
+my $template = "XXXXXX";
+my ($file_handle, $file_name) = tempfile($template, UNLINK => 1);
+# write inbound message to temp file
+while (my $line = <STDIN>) {
+  print $file_handle "$line";
+}
+
+# change permissions on temp file so clamav user can scan
+my $files_changed = chmod(0644, "$scan_dir/$file_name");
+if ($files_changed != 1) {
+  &log_error("failed to chmod 0644 $scan_dir/$file_name");
+  &remove_file($file_name, $scan_dir) if ($persistent_perl == 1);
+  exit($abort_retry);
+}
+
+# invoke clamdscan on temp file
+my @clamdscan_args = ("$clamdscan", "--quiet", "$scan_dir/$file_name");
+system(@clamdscan_args);
+
+# shift return value by 8 bits
+my $clamdscan_retval = ($? >> 8);
+if ($clamdscan_retval == 0) {
+  # message clean
+  # print message to stdout for next filter, or delivery
+  unless(open(MSG, "$scan_dir/$file_name")) {
+    &log_error("error $!: failed to open $scan_dir/$file_name");
+    &remove_file($file_name, $scan_dir) if ($persistent_perl == 1);
+    exit($abort_retry);
+  }
+  while (my $line = <MSG>) {
+    print STDOUT $line;
+  }
+  close MSG;
+  &remove_file($file_name, $scan_dir) if ($persistent_perl == 1);
+  exit($next_filter);
+}
+if ($clamdscan_retval == 1) {
+  # message infected
+  &remove_file($file_name, $scan_dir) if ($persistent_perl == 1);
+  exit($abort_reject);
+}
+# other error, quarantine message for manual intervention / analysis
+&quarantine_file($file_name, $scan_dir, $hold_dir);
+&log_error("clamdscan failed with $clamdscan_retval while scanning $hold_dir/$file_name");
+exit($abort_quarantine);
+
