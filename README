@@ -1,0 +1,44 @@
+Requirements:
+
+  qmail has had the QMAILQUEUE patch applied
+
+  qmail-qfilter
+    http://www.untroubled.org/qmail-qfilter/
+
+  Perl
+    http://www.perl.org
+
+  PersistentPerl recommended
+    http://daemoninc.com/PersistentPerl/
+
+Installation:
+
+  Create qmail-qfilter working directory hierarchy as follows
+
+  su -
+  mkdir -p /var/qmail/qfilter/{temp,scan,hold,log}
+  chown qmaild:clamav /var/qmail/qfilter
+  (assuming clamd runs as user clamav)
+  chown qmaild:nofiles /var/qmail/qfilter/{temp,hold,log}
+  chown qmaild:clamav /var/qmail/qfilter/scan
+  chmod -R 750 /var/qmail/qfilter
+  chmod +t /var/qmail/qfilter/scan
+
+Before compiling qmail-qfilter
+
+  Change TMPDIR in qmail-qfilter.c to:
+  #define TMPDIR "/var/qmail/qfilter/temp"
+
+Create qmail-qfilter.sh wrapper
+
+  #!/bin/sh
+  exec /path/to/qmail-qfilter /path/to/qmail-qfilter-clamdscan
+
+Example of modified /etc/tcprules/smtp
+
+  127.:allow,RELAYCLIENT=""
+  :allow,QMAILQUEUE="/path/to/qfilter-wrapper.sh",DEBUG=""
+
+Don't forget to edit /etc/ld.so.conf and run ldconfig
+
+  /usr/local/bglibs/lib
